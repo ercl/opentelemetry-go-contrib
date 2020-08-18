@@ -66,7 +66,6 @@ func (e *Exporter) addBasicAuth(req *http.Request) error {
 		}
 		password := string(file)
 		req.SetBasicAuth(username, password)
-		e.storeAuthHeader(req.Header.Get("Authorization"))
 		return nil
 	}
 
@@ -76,7 +75,6 @@ func (e *Exporter) addBasicAuth(req *http.Request) error {
 		return ErrNoBasicAuthPassword
 	}
 	req.SetBasicAuth(username, password)
-	e.storeAuthHeader(req.Header.Get("Authorization"))
 
 	return nil
 }
@@ -99,7 +97,6 @@ func (e *Exporter) addBearerTokenAuth(req *http.Request) error {
 		}
 		bearerTokenString := "Bearer " + string(file)
 		req.Header.Set("Authorization", bearerTokenString)
-		e.storeAuthHeader(bearerTokenString)
 		return nil
 	}
 
@@ -107,7 +104,6 @@ func (e *Exporter) addBearerTokenAuth(req *http.Request) error {
 	if e.config.BearerToken != "" {
 		bearerTokenString := "Bearer " + e.config.BearerToken
 		req.Header.Set("Authorization", bearerTokenString)
-		e.storeAuthHeader(bearerTokenString)
 	}
 
 	return nil
@@ -203,13 +199,4 @@ func (e *Exporter) loadClientCertificate(tlsConfig *tls.Config) error {
 	}
 	tlsConfig.Certificates = []tls.Certificate{cert}
 	return nil
-}
-
-// storeAuthHeader creates a new Headers map in the Config if it is nil and stores the
-// Authorization header value in the map.
-func (e *Exporter) storeAuthHeader(value string) {
-	if e.config.Headers == nil {
-		e.config.Headers = make(map[string]string)
-	}
-	e.config.Headers["Authorization"] = value
 }
