@@ -137,6 +137,7 @@ func (e *Exporter) buildClient() (*http.Client, error) {
 		Transport: transport,
 		Timeout:   e.config.RemoteTimeout,
 	}
+
 	return &client, nil
 }
 
@@ -176,6 +177,7 @@ func (e *Exporter) buildTLSConfig() (*tls.Config, error) {
 // struct.
 func (e *Exporter) loadCACertificates(tlsConfig *tls.Config) error {
 	caFile := e.config.TLSConfig["ca_file"]
+
 	if caFile != "" {
 		caFileData, err := ioutil.ReadFile(caFile)
 		if err != nil {
@@ -193,10 +195,13 @@ func (e *Exporter) loadCACertificates(tlsConfig *tls.Config) error {
 func (e *Exporter) loadClientCertificate(tlsConfig *tls.Config) error {
 	certFile := e.config.TLSConfig["cert_file"]
 	keyFile := e.config.TLSConfig["key_file"]
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-	if err != nil {
-		return err
+
+	if certFile != "" && keyFile != "" {
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return err
+		}
+		tlsConfig.Certificates = []tls.Certificate{cert}
 	}
-	tlsConfig.Certificates = []tls.Certificate{cert}
 	return nil
 }
