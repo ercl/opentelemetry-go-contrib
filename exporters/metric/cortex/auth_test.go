@@ -12,37 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Remove when #310 is resolved.
+// +build !386
+
 package cortex
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
+	"fmt"
 	"io/ioutil"
 	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// createFile writes a file with a slice of bytes at a specified filepath.
-func createFile(bytes []byte, filepath string) error {
-	err := ioutil.WriteFile(filepath, bytes, 0644)
-	if err != nil {
-		return err
-	}
-	return nil
-}
 
 // TestAuthentication checks whether http requests are properly authenticated with either
 // bearer tokens or basic authentication in the addHeaders method.
@@ -67,22 +65,6 @@ func TestAuthentication(t *testing.T) {
 				[]byte("TestUser:TestPassword"),
 			),
 			expectedError: nil,
-		},
-		{
-			testName: "Basic Auth with no username",
-			basicAuth: map[string]string{
-				"password": "TestPassword",
-			},
-			expectedAuthHeaderValue: "",
-			expectedError:           ErrNoBasicAuthUsername,
-		},
-		{
-			testName: "Basic Auth with no password",
-			basicAuth: map[string]string{
-				"username": "TestUser",
-			},
-			expectedAuthHeaderValue: "",
-			expectedError:           ErrNoBasicAuthPassword,
 		},
 		{
 			testName: "Basic Auth with password file",
@@ -127,12 +109,13 @@ func TestAuthentication(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.testName, func(t *testing.T) {
-			// Set up a test server that runs a handler function when it receives a http
+			// Set up a test server that runs a handler function when it receives a HTTP
 			// request. The server writes the request's Authorization header to the
 			// response body.
 			handler := func(rw http.ResponseWriter, req *http.Request) {
 				authHeaderValue := req.Header.Get("Authorization")
-				rw.Write([]byte(authHeaderValue))
+				_, err := rw.Write([]byte(authHeaderValue))
+				require.NoError(t, err)
 			}
 			server := httptest.NewServer(http.HandlerFunc(handler))
 			defer server.Close()
@@ -143,14 +126,14 @@ func TestAuthentication(t *testing.T) {
 				if passwordFile != "" && test.basicAuthPasswordFileContents != nil {
 					filepath := "./" + test.basicAuth["password_file"]
 					err := createFile(test.basicAuthPasswordFileContents, filepath)
-					require.Nil(t, err)
+					require.NoError(t, err)
 					defer os.Remove(filepath)
 				}
 			}
 			if test.bearerTokenFile != "" && test.bearerTokenFileContents != nil {
 				filepath := "./" + test.bearerTokenFile
 				err := createFile(test.bearerTokenFileContents, filepath)
-				require.Nil(t, err)
+				require.NoError(t, err)
 				defer os.Remove(filepath)
 			}
 
@@ -164,14 +147,14 @@ func TestAuthentication(t *testing.T) {
 				},
 			}
 			req, err := http.NewRequest(http.MethodPost, server.URL, nil)
-			require.Nil(t, err)
+			require.NoError(t, err)
 			err = exporter.addHeaders(req)
 
 			// Verify the error and if the Authorization header was correctly set.
 			if err != nil {
 				require.Equal(t, err.Error(), test.expectedError.Error())
 			} else {
-				require.Nil(t, test.expectedError)
+				require.NoError(t, test.expectedError)
 				authHeaderValue := req.Header.Get("Authorization")
 				require.Equal(t, authHeaderValue, test.expectedAuthHeaderValue)
 			}
@@ -179,27 +162,39 @@ func TestAuthentication(t *testing.T) {
 	}
 }
 
+// createFile writes a file with a slice of bytes at a specified filepath.
+func createFile(bytes []byte, filepath string) error {
+	err := ioutil.WriteFile(filepath, bytes, 0644)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // TestBuildClient checks whether the buildClient successfully creates a client that can
 // connect over TLS and has the correct remote timeout and proxy url.
 func TestBuildClient(t *testing.T) {
+	testProxyURL, err := url.Parse("123.4.5.6")
+	require.NoError(t, err)
+
 	tests := []struct {
-		testName              string
-		config                Config
-		expectedRemoteTimeout time.Duration
-		expectedErrorSuffix   string
+		testName               string
+		config                 Config
+		expectedRemoteTimeout  time.Duration
+		expectedErrorSubstring string
 	}{
 		{
 			testName: "Remote Timeout with Proxy URL",
 			config: Config{
-				ProxyURL:      "123.4.5.6",
+				ProxyURL:      testProxyURL,
 				RemoteTimeout: 123 * time.Second,
 				TLSConfig: map[string]string{
 					"ca_file":              "./ca_cert.pem",
 					"insecure_skip_verify": "0",
 				},
 			},
-			expectedRemoteTimeout: 123 * time.Second,
-			expectedErrorSuffix:   "proxyconnect tcp: dial tcp :0: connect: can't assign requested address",
+			expectedRemoteTimeout:  123 * time.Second,
+			expectedErrorSubstring: "proxyconnect tcp",
 		},
 		{
 			testName: "No Timeout or Proxy URL, InsecureSkipVerify is false",
@@ -209,7 +204,7 @@ func TestBuildClient(t *testing.T) {
 					"insecure_skip_verify": "0",
 				},
 			},
-			expectedErrorSuffix: "",
+			expectedErrorSubstring: "",
 		},
 		{
 			testName: "No Timeout or Proxy URL, InsecureSkipVerify is true",
@@ -219,14 +214,14 @@ func TestBuildClient(t *testing.T) {
 					"insecure_skip_verify": "1",
 				},
 			},
-			expectedErrorSuffix: "",
+			expectedErrorSubstring: "",
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.testName, func(t *testing.T) {
 			// Create and start the TLS server.
 			handler := func(rw http.ResponseWriter, req *http.Request) {
-				rw.Write([]byte("Successfully received HTTP request!"))
+				fmt.Fprint(rw, "Successfully received HTTP request!")
 			}
 			server := httptest.NewTLSServer(http.HandlerFunc(handler))
 			defer server.Close()
@@ -238,7 +233,8 @@ func TestBuildClient(t *testing.T) {
 				Type:  "CERTIFICATE",
 				Bytes: encodedCACert,
 			})
-			createFile(caCertPEM, "./ca_cert.pem")
+			err := createFile(caCertPEM, "./ca_cert.pem")
+			require.NoError(t, err)
 			defer os.Remove("ca_cert.pem")
 
 			// Create an Exporter client and check the timeout.
@@ -246,19 +242,21 @@ func TestBuildClient(t *testing.T) {
 				config: test.config,
 			}
 			client, err := exporter.buildClient()
-			require.Nil(t, err)
-			require.Equal(t, client.Timeout, test.expectedRemoteTimeout)
+			require.NoError(t, err)
+			assert.Equal(t, client.Timeout, test.expectedRemoteTimeout)
 
 			// Attempt to send the request and verify that the correct error occurred. If
-			// an error is expected, the test checks the error string's suffix since the
-			// error can contain the server URL, which changes every test.
+			// an error is expected, the test checks if the error string contains the
+			// expected error substring since the error can contain the server URL, which
+			// changes every test.
 			_, err = client.Get(server.URL)
-			if test.expectedErrorSuffix != "" {
-				require.Error(t, err)
-				errorSuffix := strings.HasSuffix(err.Error(), test.expectedErrorSuffix)
-				require.True(t, errorSuffix)
+			if test.expectedErrorSubstring != "" {
+				if assert.Error(t, err) {
+					hasErrorSubstring := strings.Contains(err.Error(), test.expectedErrorSubstring)
+					assert.True(t, hasErrorSubstring, "missing error message")
+				}
 			} else {
-				require.Nil(t, err)
+				require.NoError(t, err)
 			}
 		})
 	}
@@ -268,71 +266,98 @@ func TestBuildClient(t *testing.T) {
 // successfully verify a server and send a HTTP request and whether a server can
 // successfully verify the Exporter client and receive the HTTP request.
 func TestMutualTLS(t *testing.T) {
-	// Generate certificate authority certificate to sign other certificates.
-	caCert, caPrivateKey, err := generateCACertFiles("./ca_cert.pem", "./ca_key.pem")
-	require.Nil(t, err)
-	defer os.Remove("./ca_cert.pem")
-	defer os.Remove("./ca_key.pem")
-
-	// Generate certificate for the server. The client will check this certificate against
-	// its certificate authority to verify the server.
-	_, _, err = generateServingCertFiles(
-		caCert,
-		caPrivateKey,
-		"./serving_cert.pem",
-		"./serving_key.pem",
-	)
-	require.Nil(t, err)
-	defer os.Remove("./serving_cert.pem")
-	defer os.Remove("./serving_key.pem")
-
-	// Generate certificate for the client. The server will check this certificate against
-	// its certificate authority to verify the client.
-	_, _, err = generateClientCertFiles(
-		caCert,
-		caPrivateKey,
-		"./client_cert.pem",
-		"./client_key.pem",
-	)
-	require.Nil(t, err)
-	defer os.Remove("./client_cert.pem")
-	defer os.Remove("./client_key.pem")
-
-	// Generate the tls Config to set up mutual TLS on the server.
-	serverTLSConfig, err := generateServerTLSConfig(
-		"ca_cert.pem",
-		"serving_cert.pem",
-		"serving_key.pem",
-	)
-	require.Nil(t, err)
-
-	// Create and start the TLS server.
-	handler := func(rw http.ResponseWriter, req *http.Request) {
-		rw.Write([]byte("Successfully verified client and received request!"))
-	}
-	server := httptest.NewUnstartedServer(http.HandlerFunc(handler))
-	server.TLS = serverTLSConfig
-	server.StartTLS()
-	defer server.Close()
-
-	// Create an Exporter client with the client and CA certificate files.
-	exporter := Exporter{
-		Config{
-			TLSConfig: map[string]string{
-				"ca_file":              "./ca_cert.pem",
-				"cert_file":            "./client_cert.pem",
-				"key_file":             "./client_key.pem",
-				"insecure_skip_verify": "0",
-			},
+	tests := []struct {
+		testName      string
+		generateCerts bool
+		caCert        string
+		caKey         string
+		servingCert   string
+		servingKey    string
+		clientCert    string
+		clientKey     string
+	}{
+		{
+			testName:      "Generated ECDSA Certs",
+			generateCerts: true,
+			caCert:        "ca.crt",
+			caKey:         "ca.key",
+			servingCert:   "server.crt",
+			servingKey:    "server.key",
+			clientCert:    "client.crt",
+			clientKey:     "client.key",
 		},
 	}
-	client, err := exporter.buildClient()
-	require.Nil(t, err)
+	for _, test := range tests {
+		t.Run(test.testName, func(t *testing.T) {
+			if test.generateCerts {
+				// Generate certificate authority certificate to sign other certificates.
+				caCert, caPrivateKey, err := generateCACertFiles(test.caCert, test.caKey)
+				require.NoError(t, err)
+				defer os.Remove(test.caCert)
+				defer os.Remove(test.caKey)
 
-	// Send the request and verify that the request was successfully received.
-	res, err := client.Get(server.URL)
-	require.Nil(t, err)
-	defer res.Body.Close()
+				// Generate certificate for the server. The client will check this
+				// certificate against its certificate authority to verify the server.
+				_, _, err = generateServingCertFiles(
+					caCert,
+					caPrivateKey,
+					test.servingCert,
+					test.servingKey,
+				)
+				require.NoError(t, err)
+				defer os.Remove(test.servingCert)
+				defer os.Remove(test.servingKey)
+
+				// Generate certificate for the client. The server will check this
+				// certificate against its certificate authority to verify the client.
+				_, _, err = generateClientCertFiles(
+					caCert,
+					caPrivateKey,
+					test.clientCert,
+					test.clientKey,
+				)
+				require.NoError(t, err)
+				defer os.Remove(test.clientCert)
+				defer os.Remove(test.clientKey)
+			}
+
+			// Generate the TLS Config to set up mutual TLS on the server.
+			serverTLSConfig, err := generateServerTLSConfig(
+				test.caCert,
+				test.servingCert,
+				test.servingKey,
+			)
+			require.NoError(t, err)
+
+			// Create and start the TLS server.
+			handler := func(rw http.ResponseWriter, req *http.Request) {
+				fmt.Fprint(rw, "Successfully verified client and received request!")
+			}
+			server := httptest.NewUnstartedServer(http.HandlerFunc(handler))
+			server.TLS = serverTLSConfig
+			server.StartTLS()
+			defer server.Close()
+
+			// Create an Exporter client with the client and CA certificate files.
+			exporter := Exporter{
+				Config{
+					TLSConfig: map[string]string{
+						"ca_file":              test.caCert,
+						"cert_file":            test.clientCert,
+						"key_file":             test.clientKey,
+						"insecure_skip_verify": "0",
+					},
+				},
+			}
+			client, err := exporter.buildClient()
+			require.NoError(t, err)
+
+			// Send the request and verify that the request was successfully received.
+			res, err := client.Get(server.URL)
+			require.NoError(t, err)
+			defer res.Body.Close()
+		})
+	}
 }
 
 // generateCertFiles generates new certificate files from a template that is signed with
@@ -340,12 +365,12 @@ func TestMutualTLS(t *testing.T) {
 func generateCertFiles(
 	template *x509.Certificate,
 	signer *x509.Certificate,
-	signerKey *rsa.PrivateKey,
+	signerKey *ecdsa.PrivateKey,
 	certFilepath string,
 	keyFilepath string,
-) (*x509.Certificate, *rsa.PrivateKey, error) {
+) (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	// Generate a private key for the new certificate. This does not have to be rsa 4096.
-	privateKey, err := rsa.GenerateKey(rand.Reader, 4096)
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -364,19 +389,34 @@ func generateCertFiles(
 	}
 
 	// Write the certificate to the local directory.
-	certPEM := pem.EncodeToMemory(&pem.Block{
+	certFile, err := os.Create(certFilepath)
+	if err != nil {
+		return nil, nil, err
+	}
+	err = pem.Encode(certFile, &pem.Block{
 		Type:  "CERTIFICATE",
 		Bytes: encodedCert,
 	})
-	createFile(certPEM, certFilepath)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// Write the private key to the local directory.
 	encodedPrivateKey, err := x509.MarshalPKCS8PrivateKey(privateKey)
-	privateKeyPEM := pem.EncodeToMemory(&pem.Block{
+	if err != nil {
+		return nil, nil, err
+	}
+	keyFile, err := os.Create(keyFilepath)
+	if err != nil {
+		return nil, nil, err
+	}
+	err = pem.Encode(keyFile, &pem.Block{
 		Type:  "PRIVATE KEY",
 		Bytes: encodedPrivateKey,
 	})
-	createFile(privateKeyPEM, keyFilepath)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// Parse the newly created certificate so it can be returned.
 	cert, err := x509.ParseCertificate(encodedCert)
@@ -388,7 +428,7 @@ func generateCertFiles(
 
 // generateCACertFiles creates a CA certificate and key in the local directory. This
 // certificate is used to sign other certificates.
-func generateCACertFiles(certFilepath string, keyFilepath string) (*x509.Certificate, *rsa.PrivateKey, error) {
+func generateCACertFiles(certFilepath string, keyFilepath string) (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	// Create a template for CA certificates.
 	certTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(123),
@@ -423,10 +463,10 @@ func generateCACertFiles(certFilepath string, keyFilepath string) (*x509.Certifi
 // authority.
 func generateServingCertFiles(
 	caCert *x509.Certificate,
-	caPrivateKey *rsa.PrivateKey,
+	caPrivateKey *ecdsa.PrivateKey,
 	certFilepath string,
 	keyFilepath string,
-) (*x509.Certificate, *rsa.PrivateKey, error) {
+) (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	certTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(456),
 		Subject: pkix.Name{
@@ -445,8 +485,8 @@ func generateServingCertFiles(
 		certTemplate,
 		caCert,
 		caPrivateKey,
-		"./serving_cert.pem",
-		"./serving_key.pem",
+		certFilepath,
+		keyFilepath,
 	)
 	if err != nil {
 		return nil, nil, err
@@ -460,10 +500,10 @@ func generateServingCertFiles(
 // authority.
 func generateClientCertFiles(
 	caCert *x509.Certificate,
-	caPrivateKey *rsa.PrivateKey,
+	caPrivateKey *ecdsa.PrivateKey,
 	certFilepath string,
 	keyFilepath string,
-) (*x509.Certificate, *rsa.PrivateKey, error) {
+) (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	certTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(789),
 		Subject: pkix.Name{
@@ -481,8 +521,8 @@ func generateClientCertFiles(
 		certTemplate,
 		caCert,
 		caPrivateKey,
-		"./client_cert.pem",
-		"./client_key.pem",
+		certFilepath,
+		keyFilepath,
 	)
 	if err != nil {
 		return nil, nil, err

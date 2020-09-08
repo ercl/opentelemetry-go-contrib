@@ -31,7 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/otel/api/global"
-	"go.opentelemetry.io/otel/api/kv"
+	"go.opentelemetry.io/otel/label"
 	"go.opentelemetry.io/otel/sdk/export/metric"
 	export "go.opentelemetry.io/otel/sdk/export/metric"
 	"go.opentelemetry.io/otel/sdk/export/metric/aggregation"
@@ -56,21 +56,22 @@ var validConfig = Config{
 		"server_name":          "server",
 		"insecure_skip_verify": "1",
 	},
-	ProxyURL:     "",
+	ProxyURL:     nil,
 	PushInterval: 10 * time.Second,
 	Headers: map[string]string{
 		"x-prometheus-remote-write-version": "0.1.0",
 		"tenant-id":                         "123",
 	},
-	Client: http.DefaultClient,
+	Client:    http.DefaultClient,
+	Quantiles: []float64{0, 0.25, 0.5, 0.75, 1},
 }
 
-var testResource = resource.New(kv.String("R", "V"))
-var mockTime int64 = time.Time{}.Unix()
+var testResource = resource.New(label.String("R", "V"))
+var mockTime int64 = int64(time.Nanosecond) * time.Time{}.UnixNano() / int64(time.Millisecond)
 
 func TestExportKindFor(t *testing.T) {
 	exporter := Exporter{}
-	got := exporter.ExportKindFor(nil, aggregation.Kind(0))
+	got := exporter.ExportKindFor(nil, aggregation.Kind(rune(0)))
 	want := metric.CumulativeExporter
 
 	if got != want {
@@ -94,20 +95,14 @@ func TestConvertToTimeSeries(t *testing.T) {
 		wantLength int
 	}{
 		{
-			name:       "validCheckpointSet",
-			input:      getValidCheckpointSet(t),
-			want:       wantValidCheckpointSet,
-			wantLength: 1,
-		},
-		{
 			name:       "convertFromSum",
-			input:      getSumCheckpoint(t, 321),
+			input:      getSumCheckpoint(t, 1, 2, 3, 4, 5),
 			want:       wantSumCheckpointSet,
 			wantLength: 1,
 		},
 		{
 			name:       "convertFromLastValue",
-			input:      getLastValueCheckpoint(t, 123),
+			input:      getLastValueCheckpoint(t, 1, 2, 3, 4, 5),
 			want:       wantLastValueCheckpointSet,
 			wantLength: 1,
 		},
@@ -129,6 +124,18 @@ func TestConvertToTimeSeries(t *testing.T) {
 			want:       wantHistogramCheckpointSet,
 			wantLength: 6,
 		},
+		{
+			name:       "convertFromDistribution",
+			input:      getDistributionCheckpoint(t),
+			want:       wantDistributionCheckpointSet,
+			wantLength: 7,
+		},
+		{
+			name:       "convertFromHistogram",
+			input:      getHistogramCheckpoint(t),
+			want:       wantHistogramCheckpointSet,
+			wantLength: 6,
+		},
 	}
 
 	for _, tt := range tests {
@@ -136,9 +143,36 @@ func TestConvertToTimeSeries(t *testing.T) {
 			got, err := exporter.ConvertToTimeSeries(tt.input)
 			want := tt.want
 
+			// Check for errors and for the correct number of timeseries.
 			assert.Nil(t, err, "ConvertToTimeSeries error")
 			assert.Len(t, got, tt.wantLength, "Incorrect number of timeseries")
-			cmp.Equal(got, want)
+
+			// The TimeSeries cannot be compared easily using assert.ElementsMatch or
+			// cmp.Equal since both the ordering of the timeseries and the ordering of the
+			// labels inside each timeseries can change. To get around this, all the
+			// labels and samples are added to maps first. There aren't many labels or
+			// samples, so this nested loop shouldn't be a bottleneck.
+			gotLabels := make(map[string]bool)
+			wantLabels := make(map[string]bool)
+			gotSamples := make(map[string]bool)
+			wantSamples := make(map[string]bool)
+
+			for i := 0; i < len(got); i++ {
+				for _, label := range got[i].Labels {
+					gotLabels[label.String()] = true
+				}
+				for _, label := range want[i].Labels {
+					wantLabels[label.String()] = true
+				}
+				for _, sample := range got[i].Samples {
+					gotSamples[sample.String()] = true
+				}
+				for _, sample := range want[i].Samples {
+					wantSamples[sample.String()] = true
+				}
+			}
+			assert.Equal(t, gotLabels, wantLabels)
+			assert.Equal(t, gotSamples, wantSamples)
 		})
 	}
 }
@@ -190,8 +224,9 @@ func TestAddHeaders(t *testing.T) {
 
 	// Create http request to add headers to.
 	req, err := http.NewRequest("POST", "test.com", nil)
-	require.Nil(t, err)
-	exporter.addHeaders(req)
+	require.NoError(t, err)
+	err = exporter.addHeaders(req)
+	require.NoError(t, err)
 
 	// Check that all the headers are there.
 	for name, field := range testConfig.Headers {
@@ -212,7 +247,7 @@ func TestBuildMessage(t *testing.T) {
 	// package has its own tests, buildMessage should work as expected as long as there
 	// are no errors.
 	_, err := exporter.buildMessage(timeseries)
-	require.Nil(t, err)
+	require.NoError(t, err)
 }
 
 // TestBuildRequest tests whether a http request is a POST request, has the correct body,
@@ -224,14 +259,14 @@ func TestBuildRequest(t *testing.T) {
 
 	// Create the http request.
 	req, err := exporter.buildRequest(testMessage)
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	// Verify the http method, url, and body.
 	require.Equal(t, req.Method, http.MethodPost)
 	require.Equal(t, req.URL.String(), validConfig.Endpoint)
 
 	reqMessage, err := ioutil.ReadAll(req.Body)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, reqMessage, testMessage)
 
 	// Verify headers.
@@ -253,7 +288,7 @@ func verifyExporterRequest(req *http.Request) error {
 		return fmt.Errorf("Request does not contain the three required headers")
 	}
 
-	// Check body format and headers.
+	// Check whether request body is in the correct format.
 	compressed, err := ioutil.ReadAll(req.Body)
 	if err != nil {
 		return fmt.Errorf("Failed to read request body")
@@ -266,6 +301,29 @@ func verifyExporterRequest(req *http.Request) error {
 	err = proto.Unmarshal(uncompressed, wr)
 	if err != nil {
 		return fmt.Errorf("Failed to unmarshal message into WriteRequest struct")
+	}
+
+	// Check whether the request contains the correct data.
+	expectedWriteRequest := &prompb.WriteRequest{
+		Timeseries: []*prompb.TimeSeries{
+			{
+				Samples: []prompb.Sample{
+					{
+						Value:     float64(123),
+						Timestamp: int64(time.Nanosecond) * time.Time{}.UnixNano() / int64(time.Millisecond),
+					},
+				},
+				Labels: []*prompb.Label{
+					{
+						Name:  "__name__",
+						Value: "test_name",
+					},
+				},
+			},
+		},
+	}
+	if !cmp.Equal(wr, expectedWriteRequest) {
+		return fmt.Errorf("request does not contain the expected contents")
 	}
 
 	return nil
@@ -296,9 +354,9 @@ func TestSendRequest(t *testing.T) {
 	}
 
 	// Set up a test server to receive the request. The server responds with a 400 Bad
-	// Request status code if any headers are missing or if the body is not of the correct
-	// format. Additionally, the server can respond with status code 404 Not Found to
-	// simulate send failures.
+	// Request status code if any headers are missing or if the body does not have the
+	// correct contents. Additionally, the server can respond with status code 404 Not
+	// Found to simulate send failures.
 	handler := func(rw http.ResponseWriter, req *http.Request) {
 		err := verifyExporterRequest(req)
 		if err != nil {
@@ -306,7 +364,8 @@ func TestSendRequest(t *testing.T) {
 			return
 		}
 
-		// Return a status code 400 if header isStatusNotFound is "true", 200 otherwise.
+		// Return a status code 400 if header isStatusNotFound is "true". Otherwise,
+		// return status code 200.
 		if req.Header.Get("isStatusNotFound") == "true" {
 			rw.WriteHeader(http.StatusNotFound)
 		} else {
@@ -326,13 +385,31 @@ func TestSendRequest(t *testing.T) {
 			}
 			exporter := Exporter{*test.config}
 
-			// Create an empty Snappy-compressed message.
-			msg, err := exporter.buildMessage([]*prompb.TimeSeries{})
-			require.Nil(t, err)
+			// Create a test TimeSeries struct.
+			timeSeries := []*prompb.TimeSeries{
+				{
+					Samples: []prompb.Sample{
+						{
+							Value:     float64(123),
+							Timestamp: int64(time.Nanosecond) * time.Time{}.UnixNano() / int64(time.Millisecond),
+						},
+					},
+					Labels: []*prompb.Label{
+						{
+							Name:  "__name__",
+							Value: "test_name",
+						},
+					},
+				},
+			}
+
+			// Create a Snappy-compressed message.
+			msg, err := exporter.buildMessage(timeSeries)
+			require.NoError(t, err)
 
 			// Create a http POST request with the compressed message.
 			req, err := exporter.buildRequest(msg)
-			require.Nil(t, err)
+			require.NoError(t, err)
 
 			// Send the request to the test server and verify the error.
 			err = exporter.sendRequest(req)
@@ -340,7 +417,7 @@ func TestSendRequest(t *testing.T) {
 				errorString := err.Error()
 				require.Equal(t, errorString, test.expectedError.Error())
 			} else {
-				require.Nil(t, test.expectedError)
+				require.NoError(t, test.expectedError)
 			}
 		})
 	}

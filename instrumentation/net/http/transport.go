@@ -19,12 +19,11 @@ import (
 	"io"
 	"net/http"
 
-	"go.opentelemetry.io/otel/api/global"
 	"go.opentelemetry.io/otel/api/propagation"
-	"go.opentelemetry.io/otel/api/standard"
 	"go.opentelemetry.io/otel/api/trace"
+	"go.opentelemetry.io/otel/semconv"
 
-	"google.golang.org/grpc/codes"
+	"go.opentelemetry.io/otel/codes"
 )
 
 // Transport implements the http.RoundTripper interface and wraps
@@ -49,19 +48,17 @@ func NewTransport(base http.RoundTripper, opts ...Option) *Transport {
 	}
 
 	defaultOpts := []Option{
-		WithTracer(global.Tracer("go.opentelemetry.io/contrib/instrumentation/net/http")),
-		WithPropagators(global.Propagators()),
 		WithSpanOptions(trace.WithSpanKind(trace.SpanKindClient)),
 		WithSpanNameFormatter(defaultTransportFormatter),
 	}
 
-	c := NewConfig(append(defaultOpts, opts...)...)
+	c := newConfig(append(defaultOpts, opts...)...)
 	t.configure(c)
 
 	return &t
 }
 
-func (t *Transport) configure(c *Config) {
+func (t *Transport) configure(c *config) {
 	t.tracer = c.Tracer
 	t.propagators = c.Propagators
 	t.spanStartOptions = c.SpanStartOptions
@@ -89,7 +86,7 @@ func (t *Transport) RoundTrip(r *http.Request) (*http.Response, error) {
 	ctx, span := t.tracer.Start(r.Context(), t.spanNameFormatter("", r), opts...)
 
 	r = r.WithContext(ctx)
-	span.SetAttributes(standard.HTTPClientAttributesFromHTTPRequest(r)...)
+	span.SetAttributes(semconv.HTTPClientAttributesFromHTTPRequest(r)...)
 	propagation.InjectHTTP(ctx, t.propagators, r.Header)
 
 	res, err := t.rt.RoundTrip(r)
@@ -99,8 +96,8 @@ func (t *Transport) RoundTrip(r *http.Request) (*http.Response, error) {
 		return res, err
 	}
 
-	span.SetAttributes(standard.HTTPAttributesFromHTTPStatusCode(res.StatusCode)...)
-	span.SetStatus(standard.SpanStatusFromHTTPStatusCode(res.StatusCode))
+	span.SetAttributes(semconv.HTTPAttributesFromHTTPStatusCode(res.StatusCode)...)
+	span.SetStatus(semconv.SpanStatusFromHTTPStatusCode(res.StatusCode))
 	res.Body = &wrappedBody{ctx: ctx, span: span, body: res.Body}
 
 	return res, err

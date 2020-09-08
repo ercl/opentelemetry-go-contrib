@@ -27,13 +27,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc/codes"
+
+	"go.opentelemetry.io/otel/codes"
 
 	mocktrace "go.opentelemetry.io/contrib/internal/trace"
 	otelglobal "go.opentelemetry.io/otel/api/global"
-	"go.opentelemetry.io/otel/api/kv"
 	otelpropagation "go.opentelemetry.io/otel/api/propagation"
 	oteltrace "go.opentelemetry.io/otel/api/trace"
+	"go.opentelemetry.io/otel/label"
 )
 
 func TestChildSpanFromGlobalTracer(t *testing.T) {
@@ -59,10 +60,10 @@ func TestChildSpanFromGlobalTracer(t *testing.T) {
 }
 
 func TestChildSpanFromCustomTracer(t *testing.T) {
-	tracer := mocktrace.NewTracer("test-tracer")
+	provider, _ := mocktrace.NewProviderAndTracer(tracerName)
 
 	router := echo.New()
-	router.Use(Middleware("foobar", WithTracer(tracer)))
+	router.Use(Middleware("foobar", WithTracerProvider(provider)))
 	router.GET("/user/:id", func(c echo.Context) error {
 		span := oteltrace.SpanFromContext(c.Request().Context())
 		_, ok := span.(*mocktrace.Span)
@@ -70,7 +71,7 @@ func TestChildSpanFromCustomTracer(t *testing.T) {
 		spanTracer := span.Tracer()
 		mockTracer, ok := spanTracer.(*mocktrace.Tracer)
 		require.True(t, ok)
-		assert.Equal(t, "test-tracer", mockTracer.Name)
+		assert.Equal(t, tracerName, mockTracer.Name)
 		return c.NoContent(200)
 	})
 
@@ -81,15 +82,15 @@ func TestChildSpanFromCustomTracer(t *testing.T) {
 }
 
 func TestTrace200(t *testing.T) {
-	tracer := mocktrace.NewTracer("test-tracer")
+	provider, tracer := mocktrace.NewProviderAndTracer(tracerName)
 
 	router := echo.New()
-	router.Use(Middleware("foobar", WithTracer(tracer)))
+	router.Use(Middleware("foobar", WithTracerProvider(provider)))
 	router.GET("/user/:id", func(c echo.Context) error {
 		span := oteltrace.SpanFromContext(c.Request().Context())
 		mspan, ok := span.(*mocktrace.Span)
 		require.True(t, ok)
-		assert.Equal(t, kv.StringValue("foobar"), mspan.Attributes["http.server_name"])
+		assert.Equal(t, label.StringValue("foobar"), mspan.Attributes["http.server_name"])
 		id := c.Param("id")
 		return c.String(200, id)
 	})
@@ -108,19 +109,19 @@ func TestTrace200(t *testing.T) {
 	span := spans[0]
 	assert.Equal(t, "/user/:id", span.Name)
 	assert.Equal(t, oteltrace.SpanKindServer, span.Kind)
-	assert.Equal(t, kv.StringValue("foobar"), span.Attributes["http.server_name"])
-	assert.Equal(t, kv.IntValue(http.StatusOK), span.Attributes["http.status_code"])
-	assert.Equal(t, kv.StringValue("GET"), span.Attributes["http.method"])
-	assert.Equal(t, kv.StringValue("/user/123"), span.Attributes["http.target"])
-	assert.Equal(t, kv.StringValue("/user/:id"), span.Attributes["http.route"])
+	assert.Equal(t, label.StringValue("foobar"), span.Attributes["http.server_name"])
+	assert.Equal(t, label.IntValue(http.StatusOK), span.Attributes["http.status_code"])
+	assert.Equal(t, label.StringValue("GET"), span.Attributes["http.method"])
+	assert.Equal(t, label.StringValue("/user/123"), span.Attributes["http.target"])
+	assert.Equal(t, label.StringValue("/user/:id"), span.Attributes["http.route"])
 }
 
 func TestError(t *testing.T) {
-	tracer := mocktrace.NewTracer("test-tracer")
+	provider, tracer := mocktrace.NewProviderAndTracer(tracerName)
 
 	// setup
 	router := echo.New()
-	router.Use(Middleware("foobar", WithTracer(tracer)))
+	router.Use(Middleware("foobar", WithTracerProvider(provider)))
 	wantErr := errors.New("oh no")
 	// configure a handler that returns an error and 5xx status
 	// code
@@ -138,9 +139,9 @@ func TestError(t *testing.T) {
 	require.Len(t, spans, 1)
 	span := spans[0]
 	assert.Equal(t, "/server_err", span.Name)
-	assert.Equal(t, kv.StringValue("foobar"), span.Attributes["http.server_name"])
-	assert.Equal(t, kv.IntValue(http.StatusInternalServerError), span.Attributes["http.status_code"])
-	assert.Equal(t, kv.StringValue("oh no"), span.Attributes["echo.error"])
+	assert.Equal(t, label.StringValue("foobar"), span.Attributes["http.server_name"])
+	assert.Equal(t, label.IntValue(http.StatusInternalServerError), span.Attributes["http.status_code"])
+	assert.Equal(t, label.StringValue("oh no"), span.Attributes["echo.error"])
 	// server errors set the status
 	assert.Equal(t, codes.Internal, span.Status)
 }
@@ -162,7 +163,7 @@ func TestGetSpanNotInstrumented(t *testing.T) {
 }
 
 func TestPropagationWithGlobalPropagators(t *testing.T) {
-	tracer := mocktrace.NewTracer("test-tracer")
+	provider, tracer := mocktrace.NewProviderAndTracer(tracerName)
 
 	r := httptest.NewRequest("GET", "/user/123", nil)
 	w := httptest.NewRecorder()
@@ -171,7 +172,7 @@ func TestPropagationWithGlobalPropagators(t *testing.T) {
 	otelpropagation.InjectHTTP(ctx, otelglobal.Propagators(), r.Header)
 
 	router := echo.New()
-	router.Use(Middleware("foobar", WithTracer(tracer)))
+	router.Use(Middleware("foobar", WithTracerProvider(provider)))
 	router.GET("/user/:id", func(c echo.Context) error {
 		span := oteltrace.SpanFromContext(c.Request().Context())
 		mspan, ok := span.(*mocktrace.Span)
@@ -185,7 +186,8 @@ func TestPropagationWithGlobalPropagators(t *testing.T) {
 }
 
 func TestPropagationWithCustomPropagators(t *testing.T) {
-	tracer := mocktrace.NewTracer("test-tracer")
+	provider, tracer := mocktrace.NewProviderAndTracer(tracerName)
+
 	b3 := oteltrace.B3{}
 	props := otelpropagation.New(
 		otelpropagation.WithExtractors(b3),
@@ -199,7 +201,7 @@ func TestPropagationWithCustomPropagators(t *testing.T) {
 	otelpropagation.InjectHTTP(ctx, props, r.Header)
 
 	router := echo.New()
-	router.Use(Middleware("foobar", WithTracer(tracer), WithPropagators(props)))
+	router.Use(Middleware("foobar", WithTracerProvider(provider), WithPropagators(props)))
 	router.GET("/user/:id", func(c echo.Context) error {
 		span := oteltrace.SpanFromContext(c.Request().Context())
 		mspan, ok := span.(*mocktrace.Span)

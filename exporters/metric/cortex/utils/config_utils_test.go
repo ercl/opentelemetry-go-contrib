@@ -98,6 +98,22 @@ func TestNewConfig(t *testing.T) {
 			expectedConfig: nil,
 			expectedError:  cortex.ErrTwoBearerTokens,
 		},
+		{
+			testName:       "Custom Quantiles",
+			yamlByteString: quantilesYAML,
+			fileName:       "config.yml",
+			directoryPath:  "/test",
+			expectedConfig: &customQuantilesConfig,
+			expectedError:  nil,
+		},
+		{
+			testName:       "Custom Histogram Boundaries",
+			yamlByteString: bucketBoundariesYAML,
+			fileName:       "config.yml",
+			directoryPath:  "/test",
+			expectedConfig: &customBucketBoundariesConfig,
+			expectedError:  nil,
+		},
 	}
 
 	for _, test := range tests {
@@ -105,7 +121,7 @@ func TestNewConfig(t *testing.T) {
 			// Create YAML file.
 			fullPath := test.directoryPath + "/" + test.fileName
 			fs, err := initYAML(test.yamlByteString, fullPath)
-			require.Nil(t, err)
+			require.NoError(t, err)
 
 			// Create new Config struct from the specified YAML file with an in-memory
 			// filesystem.
@@ -153,7 +169,7 @@ func TestWithFilepath(t *testing.T) {
 			// Create YAML file.
 			fullPath := test.directoryPath + "/" + test.fileName
 			fs, err := initYAML(test.yamlByteString, fullPath)
-			require.Nil(t, err)
+			require.NoError(t, err)
 
 			// Create new Config struct from the specified YAML file with an in-memory
 			// filesystem. If a path is added, Viper should be able to find the file and
@@ -165,7 +181,7 @@ func TestWithFilepath(t *testing.T) {
 					utils.WithFilepath(test.directoryPath),
 					utils.WithFilesystem(fs),
 				)
-				require.Nil(t, err)
+				require.NoError(t, err)
 			} else {
 				_, err := utils.NewConfig(test.fileName, utils.WithFilesystem(fs))
 				require.Error(t, err)
@@ -179,7 +195,7 @@ func TestWithFilepath(t *testing.T) {
 func TestWithClient(t *testing.T) {
 	// Create a YAML file.
 	fs, err := initYAML(validYAML, "/test/config.yml")
-	require.Nil(t, err)
+	require.NoError(t, err)
 
 	// Create a new Config struct with a custom HTTP client.
 	customClient := &http.Client{

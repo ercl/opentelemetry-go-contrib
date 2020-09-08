@@ -19,8 +19,8 @@ import (
 
 	otelglobal "go.opentelemetry.io/otel/api/global"
 	otelpropagation "go.opentelemetry.io/otel/api/propagation"
-	"go.opentelemetry.io/otel/api/standard"
 	oteltrace "go.opentelemetry.io/otel/api/trace"
+	"go.opentelemetry.io/otel/semconv"
 )
 
 const (
@@ -34,13 +34,14 @@ const (
 // the request.  Options can be applied to configure the tracer and propagators
 // used for this filter.
 func OTelFilter(service string, opts ...Option) restful.FilterFunction {
-	cfg := Config{}
+	cfg := config{}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	if cfg.Tracer == nil {
-		cfg.Tracer = otelglobal.TraceProvider().Tracer(tracerName, oteltrace.WithInstrumentationVersion(tracerVersion))
+	if cfg.TracerProvider == nil {
+		cfg.TracerProvider = otelglobal.TraceProvider()
 	}
+	tracer := cfg.TracerProvider.Tracer(tracerName, oteltrace.WithInstrumentationVersion(tracerVersion))
 	if cfg.Propagators == nil {
 		cfg.Propagators = otelglobal.Propagators()
 	}
@@ -51,12 +52,12 @@ func OTelFilter(service string, opts ...Option) restful.FilterFunction {
 		spanName := route
 
 		opts := []oteltrace.StartOption{
-			oteltrace.WithAttributes(standard.NetAttributesFromHTTPRequest("tcp", r)...),
-			oteltrace.WithAttributes(standard.EndUserAttributesFromHTTPRequest(r)...),
-			oteltrace.WithAttributes(standard.HTTPServerAttributesFromHTTPRequest(service, route, r)...),
+			oteltrace.WithAttributes(semconv.NetAttributesFromHTTPRequest("tcp", r)...),
+			oteltrace.WithAttributes(semconv.EndUserAttributesFromHTTPRequest(r)...),
+			oteltrace.WithAttributes(semconv.HTTPServerAttributesFromHTTPRequest(service, route, r)...),
 			oteltrace.WithSpanKind(oteltrace.SpanKindServer),
 		}
-		ctx, span := cfg.Tracer.Start(ctx, spanName, opts...)
+		ctx, span := tracer.Start(ctx, spanName, opts...)
 		defer span.End()
 
 		// pass the span through the request context
@@ -64,8 +65,8 @@ func OTelFilter(service string, opts ...Option) restful.FilterFunction {
 
 		chain.ProcessFilter(req, resp)
 
-		attrs := standard.HTTPAttributesFromHTTPStatusCode(resp.StatusCode())
-		spanStatus, spanMessage := standard.SpanStatusFromHTTPStatusCode(resp.StatusCode())
+		attrs := semconv.HTTPAttributesFromHTTPStatusCode(resp.StatusCode())
+		spanStatus, spanMessage := semconv.SpanStatusFromHTTPStatusCode(resp.StatusCode())
 		span.SetAttributes(attrs...)
 		span.SetStatus(spanStatus, spanMessage)
 	}

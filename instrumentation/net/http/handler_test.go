@@ -23,17 +23,18 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"google.golang.org/grpc/codes"
 
-	"go.opentelemetry.io/otel/api/kv"
-	"go.opentelemetry.io/otel/api/standard"
+	"go.opentelemetry.io/otel/codes"
+
 	"go.opentelemetry.io/otel/api/trace"
+	"go.opentelemetry.io/otel/label"
+	"go.opentelemetry.io/otel/semconv"
 
 	mockmeter "go.opentelemetry.io/contrib/internal/metric"
 	mocktrace "go.opentelemetry.io/contrib/internal/trace"
 )
 
-func assertMetricLabels(t *testing.T, expectedLabels []kv.KeyValue, measurementBatches []mockmeter.Batch) {
+func assertMetricLabels(t *testing.T, expectedLabels []label.KeyValue, measurementBatches []mockmeter.Batch) {
 	for _, batch := range measurementBatches {
 		assert.ElementsMatch(t, expectedLabels, batch.Labels)
 	}
@@ -42,8 +43,8 @@ func assertMetricLabels(t *testing.T, expectedLabels []kv.KeyValue, measurementB
 func TestHandlerBasics(t *testing.T) {
 	rr := httptest.NewRecorder()
 
-	tracer := mocktrace.Tracer{}
-	meterimpl, meter := mockmeter.NewMeter()
+	tracerProvider, tracer := mocktrace.NewProviderAndTracer(instrumentationName)
+	meterimpl, meterProvider := mockmeter.NewProvider()
 
 	operation := "test_handler"
 
@@ -53,8 +54,8 @@ func TestHandlerBasics(t *testing.T) {
 				t.Fatal(err)
 			}
 		}), operation,
-		WithTracer(&tracer),
-		WithMeter(meter),
+		WithTracerProvider(tracerProvider),
+		WithMeterProvider(meterProvider),
 	)
 
 	r, err := http.NewRequest(http.MethodGet, "http://localhost/", strings.NewReader("foo"))
@@ -67,12 +68,11 @@ func TestHandlerBasics(t *testing.T) {
 		t.Fatalf("got 0 recorded measurements, expected 1 or more")
 	}
 
-	labelsToVerify := []kv.KeyValue{
-		standard.HTTPServerNameKey.String(operation),
-		standard.HTTPSchemeHTTP,
-		standard.HTTPHostKey.String(r.Host),
-		standard.HTTPFlavorKey.String(fmt.Sprintf("1.%d", r.ProtoMinor)),
-		standard.HTTPRequestContentLengthKey.Int64(3),
+	labelsToVerify := []label.KeyValue{
+		semconv.HTTPServerNameKey.String(operation),
+		semconv.HTTPSchemeHTTP,
+		semconv.HTTPHostKey.String(r.Host),
+		semconv.HTTPFlavorKey.String(fmt.Sprintf("1.%d", r.ProtoMinor)),
 	}
 
 	assertMetricLabels(t, labelsToVerify, meterimpl.MeasurementBatches)
@@ -98,7 +98,7 @@ func TestHandlerBasics(t *testing.T) {
 func TestHandlerNoWrite(t *testing.T) {
 	rr := httptest.NewRecorder()
 
-	tracer := mocktrace.Tracer{}
+	tracerProvider, tracer := mocktrace.NewProviderAndTracer(instrumentationName)
 
 	operation := "test_handler"
 	var span trace.Span
@@ -107,7 +107,7 @@ func TestHandlerNoWrite(t *testing.T) {
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			span = trace.SpanFromContext(r.Context())
 		}), operation,
-		WithTracer(&tracer),
+		WithTracerProvider(tracerProvider),
 	)
 
 	r, err := http.NewRequest(http.MethodGet, "http://localhost/", nil)
@@ -137,7 +137,7 @@ func TestHandlerNoWrite(t *testing.T) {
 func TestResponseWriterOptionalInterfaces(t *testing.T) {
 	rr := httptest.NewRecorder()
 
-	tracer := mocktrace.Tracer{}
+	tracerProvider, _ := mocktrace.NewProviderAndTracer(instrumentationName)
 
 	// ResponseRecorder implements the Flusher interface. Make sure the
 	// wrapped ResponseWriter passed to the handler still implements
@@ -151,7 +151,7 @@ func TestResponseWriterOptionalInterfaces(t *testing.T) {
 				t.Fatal(err)
 			}
 		}), "test_handler",
-		WithTracer(&tracer))
+		WithTracerProvider(tracerProvider))
 
 	r, err := http.NewRequest(http.MethodGet, "http://localhost/", nil)
 	if err != nil {

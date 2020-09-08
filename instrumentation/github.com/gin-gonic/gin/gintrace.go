@@ -20,13 +20,14 @@ import (
 	"fmt"
 
 	"github.com/gin-gonic/gin"
-	"google.golang.org/grpc/codes"
+
+	"go.opentelemetry.io/otel/codes"
 
 	otelglobal "go.opentelemetry.io/otel/api/global"
-	"go.opentelemetry.io/otel/api/kv"
 	otelpropagation "go.opentelemetry.io/otel/api/propagation"
-	"go.opentelemetry.io/otel/api/standard"
 	oteltrace "go.opentelemetry.io/otel/api/trace"
+	"go.opentelemetry.io/otel/label"
+	"go.opentelemetry.io/otel/semconv"
 )
 
 const (
@@ -38,34 +39,35 @@ const (
 // The service parameter should describe the name of the (virtual)
 // server handling the request.
 func Middleware(service string, opts ...Option) gin.HandlerFunc {
-	cfg := Config{}
+	cfg := config{}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	if cfg.Tracer == nil {
-		cfg.Tracer = otelglobal.Tracer(tracerName)
+	if cfg.TracerProvider == nil {
+		cfg.TracerProvider = otelglobal.TraceProvider()
 	}
+	tracer := cfg.TracerProvider.Tracer(tracerName)
 	if cfg.Propagators == nil {
 		cfg.Propagators = otelglobal.Propagators()
 	}
 	return func(c *gin.Context) {
-		c.Set(tracerKey, cfg.Tracer)
+		c.Set(tracerKey, tracer)
 		savedCtx := c.Request.Context()
 		defer func() {
 			c.Request = c.Request.WithContext(savedCtx)
 		}()
 		ctx := otelpropagation.ExtractHTTP(savedCtx, cfg.Propagators, c.Request.Header)
 		opts := []oteltrace.StartOption{
-			oteltrace.WithAttributes(standard.NetAttributesFromHTTPRequest("tcp", c.Request)...),
-			oteltrace.WithAttributes(standard.EndUserAttributesFromHTTPRequest(c.Request)...),
-			oteltrace.WithAttributes(standard.HTTPServerAttributesFromHTTPRequest(service, c.FullPath(), c.Request)...),
+			oteltrace.WithAttributes(semconv.NetAttributesFromHTTPRequest("tcp", c.Request)...),
+			oteltrace.WithAttributes(semconv.EndUserAttributesFromHTTPRequest(c.Request)...),
+			oteltrace.WithAttributes(semconv.HTTPServerAttributesFromHTTPRequest(service, c.FullPath(), c.Request)...),
 			oteltrace.WithSpanKind(oteltrace.SpanKindServer),
 		}
 		spanName := c.FullPath()
 		if spanName == "" {
 			spanName = fmt.Sprintf("HTTP %s route not found", c.Request.Method)
 		}
-		ctx, span := cfg.Tracer.Start(ctx, spanName, opts...)
+		ctx, span := tracer.Start(ctx, spanName, opts...)
 		defer span.End()
 
 		// pass the span through the request context
@@ -75,12 +77,12 @@ func Middleware(service string, opts ...Option) gin.HandlerFunc {
 		c.Next()
 
 		status := c.Writer.Status()
-		attrs := standard.HTTPAttributesFromHTTPStatusCode(status)
-		spanStatus, spanMessage := standard.SpanStatusFromHTTPStatusCode(status)
+		attrs := semconv.HTTPAttributesFromHTTPStatusCode(status)
+		spanStatus, spanMessage := semconv.SpanStatusFromHTTPStatusCode(status)
 		span.SetAttributes(attrs...)
 		span.SetStatus(spanStatus, spanMessage)
 		if len(c.Errors) > 0 {
-			span.SetAttributes(kv.String("gin.errors", c.Errors.String()))
+			span.SetAttributes(label.String("gin.errors", c.Errors.String()))
 		}
 	}
 }
@@ -102,7 +104,7 @@ func HTML(c *gin.Context, code int, name string, obj interface{}) {
 	defer func() {
 		c.Request = c.Request.WithContext(savedContext)
 	}()
-	opt := oteltrace.WithAttributes(kv.String("go.template", name))
+	opt := oteltrace.WithAttributes(label.String("go.template", name))
 	ctx, span := tracer.Start(savedContext, "gin.renderer.html", opt)
 	defer func() {
 		if r := recover(); r != nil {

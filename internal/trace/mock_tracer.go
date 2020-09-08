@@ -21,8 +21,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"go.opentelemetry.io/otel/api/kv"
 	oteltrace "go.opentelemetry.io/otel/api/trace"
+	"go.opentelemetry.io/otel/label"
 
 	"go.opentelemetry.io/contrib/internal/trace/parent"
 )
@@ -139,7 +139,7 @@ func (mt *Tracer) Start(ctx context.Context, name string, o ...oteltrace.StartOp
 		Name:         name,
 		Attributes:   nil,
 		ParentSpanID: parentSpanID,
-		Links:        make(map[oteltrace.SpanContext][]kv.KeyValue),
+		Links:        make(map[oteltrace.SpanContext][]label.KeyValue),
 	}
 	if len(opts.Attributes) > 0 {
 		span.SetAttributes(opts.Attributes...)
@@ -157,4 +157,12 @@ func (mt *Tracer) Start(ctx context.Context, name string, o ...oteltrace.StartOp
 	}
 
 	return oteltrace.ContextWithSpan(ctx, span), span
+}
+
+// NewProviderAndTracer return mock provider and tracer.
+func NewProviderAndTracer(tracerName string) (*Provider, *Tracer) {
+	var provider Provider
+	tracer := provider.Tracer(tracerName)
+
+	return &provider, tracer.(*Tracer)
 }

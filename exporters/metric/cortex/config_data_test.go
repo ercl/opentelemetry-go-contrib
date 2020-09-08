@@ -26,6 +26,7 @@ var validatedStandardConfig = cortex.Config{
 	Name:          "Config",
 	RemoteTimeout: 30 * time.Second,
 	PushInterval:  10 * time.Second,
+	Quantiles:     []float64{0.5, 0.9, 0.95, 0.99},
 }
 
 // Config struct with default values other than the remote timeout. This is used to verify
@@ -35,6 +36,17 @@ var validatedCustomTimeoutConfig = cortex.Config{
 	Name:          "Config",
 	RemoteTimeout: 10 * time.Second,
 	PushInterval:  10 * time.Second,
+	Quantiles:     []float64{0.5, 0.9, 0.95, 0.99},
+}
+
+// Config struct with default values other than the quantiles. This is used to verify
+// the output of Validate().
+var validatedQuantilesConfig = cortex.Config{
+	Endpoint:      "/api/prom/push",
+	Name:          "Config",
+	RemoteTimeout: 30 * time.Second,
+	PushInterval:  10 * time.Second,
+	Quantiles:     []float64{0, 0.5, 1},
 }
 
 // Example Config struct with a custom remote timeout.
@@ -104,9 +116,48 @@ var exampleTwoAuthConfig = cortex.Config{
 	RemoteTimeout: 30 * time.Second,
 	PushInterval:  10 * time.Second,
 	BasicAuth: map[string]string{
-		"username":      "user",
-		"password":      "password",
-		"password_file": "passwordFile",
+		"username": "user",
+		"password": "password",
 	},
 	BearerToken: "bearer_token",
+}
+
+// Example Config struct with no password for basic authentication.
+var exampleNoPasswordConfig = cortex.Config{
+	Endpoint:      "/api/prom/push",
+	Name:          "Config",
+	RemoteTimeout: 30 * time.Second,
+	PushInterval:  10 * time.Second,
+	BasicAuth: map[string]string{
+		"username": "user",
+	},
+}
+
+// Example Config struct with no password for basic authentication.
+var exampleNoUsernameConfig = cortex.Config{
+	Endpoint:      "/api/prom/push",
+	Name:          "Config",
+	RemoteTimeout: 30 * time.Second,
+	PushInterval:  10 * time.Second,
+	BasicAuth: map[string]string{
+		"password": "password",
+	},
+}
+
+// Example Config struct with invalid quantiles.
+var exampleInvalidQuantilesConfig = cortex.Config{
+	Endpoint:      "/api/prom/push",
+	Name:          "Config",
+	RemoteTimeout: 30 * time.Second,
+	PushInterval:  10 * time.Second,
+	Quantiles:     []float64{0, 1, 2, 3},
+}
+
+// Example Config struct with valid quantiles.
+var exampleValidQuantilesConfig = cortex.Config{
+	Endpoint:      "/api/prom/push",
+	Name:          "Config",
+	RemoteTimeout: 30 * time.Second,
+	PushInterval:  10 * time.Second,
+	Quantiles:     []float64{0, 0.5, 1},
 }

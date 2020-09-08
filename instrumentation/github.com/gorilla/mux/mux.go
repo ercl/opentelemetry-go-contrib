@@ -23,8 +23,8 @@ import (
 
 	otelglobal "go.opentelemetry.io/otel/api/global"
 	otelpropagation "go.opentelemetry.io/otel/api/propagation"
-	"go.opentelemetry.io/otel/api/standard"
 	oteltrace "go.opentelemetry.io/otel/api/trace"
+	"go.opentelemetry.io/otel/semconv"
 )
 
 const (
@@ -35,20 +35,21 @@ const (
 // requests.  The service parameter should describe the name of the
 // (virtual) server handling the request.
 func Middleware(service string, opts ...Option) mux.MiddlewareFunc {
-	cfg := Config{}
+	cfg := config{}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	if cfg.Tracer == nil {
-		cfg.Tracer = otelglobal.Tracer(tracerName)
+	if cfg.TracerProvider == nil {
+		cfg.TracerProvider = otelglobal.TraceProvider()
 	}
+	tracer := cfg.TracerProvider.Tracer(tracerName)
 	if cfg.Propagators == nil {
 		cfg.Propagators = otelglobal.Propagators()
 	}
 	return func(handler http.Handler) http.Handler {
 		return traceware{
 			service:     service,
-			tracer:      cfg.Tracer,
+			tracer:      tracer,
 			propagators: cfg.Propagators,
 			handler:     handler,
 		}
@@ -129,9 +130,9 @@ func (tw traceware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		spanName = fmt.Sprintf("HTTP %s route not found", r.Method)
 	}
 	opts := []oteltrace.StartOption{
-		oteltrace.WithAttributes(standard.NetAttributesFromHTTPRequest("tcp", r)...),
-		oteltrace.WithAttributes(standard.EndUserAttributesFromHTTPRequest(r)...),
-		oteltrace.WithAttributes(standard.HTTPServerAttributesFromHTTPRequest(tw.service, routeStr, r)...),
+		oteltrace.WithAttributes(semconv.NetAttributesFromHTTPRequest("tcp", r)...),
+		oteltrace.WithAttributes(semconv.EndUserAttributesFromHTTPRequest(r)...),
+		oteltrace.WithAttributes(semconv.HTTPServerAttributesFromHTTPRequest(tw.service, routeStr, r)...),
 		oteltrace.WithSpanKind(oteltrace.SpanKindServer),
 	}
 	ctx, span := tw.tracer.Start(ctx, spanName, opts...)
@@ -140,8 +141,8 @@ func (tw traceware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rrw := getRRW(w)
 	defer putRRW(rrw)
 	tw.handler.ServeHTTP(rrw, r2)
-	attrs := standard.HTTPAttributesFromHTTPStatusCode(rrw.status)
-	spanStatus, spanMessage := standard.SpanStatusFromHTTPStatusCode(rrw.status)
+	attrs := semconv.HTTPAttributesFromHTTPStatusCode(rrw.status)
+	spanStatus, spanMessage := semconv.SpanStatusFromHTTPStatusCode(rrw.status)
 	span.SetAttributes(attrs...)
 	span.SetStatus(spanStatus, spanMessage)
 }
