@@ -8,7 +8,8 @@ require (
 	github.com/gorilla/mux v1.8.0
 	github.com/stretchr/testify v1.6.1
 	go.opentelemetry.io/contrib v0.11.0
-	go.opentelemetry.io/otel v0.11.0
-	go.opentelemetry.io/otel/exporters/stdout v0.11.0
-	go.opentelemetry.io/otel/sdk v0.11.0
+	go.opentelemetry.io/otel v0.15.0
+	go.opentelemetry.io/otel/exporters/stdout v0.15.0
+	go.opentelemetry.io/otel/sdk v0.15.0
+	google.golang.org/grpc v1.31.0 // indirect
 )
