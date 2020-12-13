@@ -5,8 +5,8 @@ go 1.14
 replace go.opentelemetry.io/contrib => ../../../..
 
 require (
-	github.com/Shopify/sarama v1.27.0
+	github.com/Shopify/sarama v1.27.2
 	github.com/stretchr/testify v1.6.1
-	go.opentelemetry.io/contrib v0.11.0
+	go.opentelemetry.io/contrib v0.11.0 // indirect
 	go.opentelemetry.io/otel v0.11.0
 )
