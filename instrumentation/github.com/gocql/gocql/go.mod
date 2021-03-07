@@ -7,8 +7,10 @@ replace go.opentelemetry.io/contrib => ../../../../
 require (
 	github.com/gocql/gocql v0.0.0-20200624222514-34081eda590e
 	github.com/golang/snappy v0.0.1 // indirect
-	github.com/stretchr/testify v1.6.1
+	github.com/stretchr/testify v1.7.0
 	go.opentelemetry.io/contrib v0.11.0
-	go.opentelemetry.io/otel v0.11.0
-	go.opentelemetry.io/otel/sdk v0.11.0
+	go.opentelemetry.io/otel v0.18.0
+	go.opentelemetry.io/otel/sdk v0.18.0 // indirect
+	go.opentelemetry.io/otel/sdk/export/metric v0.18.0
+	go.opentelemetry.io/otel/sdk/metric v0.18.0
 )
